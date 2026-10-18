@@ -1085,6 +1085,7 @@ static int routing_hw_params(struct snd_soc_component *component,
 		break;
 	case SNDRV_PCM_FORMAT_S32_LE:
 			session->bits_per_sample = 24;
+		fallthrough;
 	default:
 		break;
 	}
