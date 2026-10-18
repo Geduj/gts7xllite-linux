@@ -12,6 +12,18 @@ menuconfig INPUT_TOUCHSCREEN
 
 if INPUT_TOUCHSCREEN
 
+config TOUCHSCREEN_FT8203
+	tristate "FocalTech FT8203 SPI touchscreen"
+	depends on SPI
+	depends on DRM || !DRM
+	select CRC_CCITT
+	help
+	  Say Y here to enable support for the touch part of the FocalTech
+	  FT8203 touch and display driver IC, connected over SPI.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called focaltech_ft8203.
+	  
 config TOUCHSCREEN_88PM860X
 	tristate "Marvell 88PM860x touchscreen"
 	depends on MFD_88PM860X
