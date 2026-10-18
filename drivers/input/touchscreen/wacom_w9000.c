@@ -8,6 +8,7 @@
  *	Copyright (C) 2012, Samsung Electronics Co. Ltd.
  */
 
+#include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
@@ -23,14 +24,30 @@
 
 /* Message length */
 #define CMD_QUERY_NUM_MAX	9
-#define MSG_COORD_NUM_MAX	12
+#define MSG_COORD_NUM_MAX	16
 
 /* Commands */
 #define CMD_QUERY		0x2a
 
+/* Packet ID in the low nibble of byte 0, on chips that send more than coordinates */
+#define PACKET_ID_MASK		GENMASK(3, 0)
+#define PACKET_ID_COORD		1
+
+/**
+ * struct wacom_w9000_variant - per-chip protocol differences
+ * @cmd_query_num: length of the query response
+ * @msg_coord_num: length of one report read per interrupt
+ * @pressure_mask: valid bits of the pressure field, 0 for all 16 bits
+ * @max_tilt: tilt range (+/-) reported in bytes 8 and 9, 0 if not reported
+ * @has_packet_id: byte 0 carries a packet type, only type 1 is a coordinate
+ * @name: input device name
+ */
 struct wacom_w9000_variant {
 	const u8 cmd_query_num;
 	const u8 msg_coord_num;
+	const u16 pressure_mask;
+	const u8 max_tilt;
+	const bool has_packet_id;
 	const char *name;
 };
 
@@ -149,10 +166,29 @@ static int wacom_w9000_power_off(struct wacom_w9000_data *wacom_data)
 	return 0;
 }
 
+static void wacom_w9000_report_tilt(struct wacom_w9000_data *wacom_data, const u8 *data)
+{
+	const struct touchscreen_properties *prop = &wacom_data->prop;
+	int tilt_x = (s8)data[8];
+	int tilt_y = (s8)data[9];
+
+	/* Same transform touchscreen_report_pos() applies to x/y: invert, then swap */
+	if (prop->invert_x)
+		tilt_x = -tilt_x;
+	if (prop->invert_y)
+		tilt_y = -tilt_y;
+	if (prop->swap_x_y)
+		swap(tilt_x, tilt_y);
+
+	input_report_abs(wacom_data->input_dev, ABS_TILT_X, tilt_x);
+	input_report_abs(wacom_data->input_dev, ABS_TILT_Y, tilt_y);
+}
+
 static void wacom_w9000_coord(struct wacom_w9000_data *wacom_data)
 {
 	struct i2c_client *client = wacom_data->client;
 	struct device *dev = &wacom_data->client->dev;
+	const struct wacom_w9000_variant *variant = wacom_data->variant;
 	u8 data[MSG_COORD_NUM_MAX];
 	bool touch, rubber, side_button;
 	u16 x, y, pressure;
@@ -169,6 +205,15 @@ static void wacom_w9000_coord(struct wacom_w9000_data *wacom_data)
 
 	dev_dbg(dev, "data: %*ph\n", wacom_data->variant->msg_coord_num, data);
 
+	/*
+	 * Newer chips also send notifications (e.g. a request to pause touch
+	 * scanning while the pen is near). They have bit 7 clear and must not
+	 * be taken as the pen leaving proximity.
+	 */
+	if (variant->has_packet_id &&
+	    FIELD_GET(PACKET_ID_MASK, data[0]) != PACKET_ID_COORD)
+		return;
+
 	if (data[0] & BIT(7)) {
 		wacom_data->pen_proximity = true;
 
@@ -179,6 +224,8 @@ static void wacom_w9000_coord(struct wacom_w9000_data *wacom_data)
 		x = get_unaligned_be16(&data[1]);
 		y = get_unaligned_be16(&data[3]);
 		pressure = get_unaligned_be16(&data[5]);
+		if (variant->pressure_mask)
+			pressure &= variant->pressure_mask;
 
 		if (wacom_data->variant->msg_coord_num > 7)
 			distance = data[7];
@@ -199,6 +246,9 @@ static void wacom_w9000_coord(struct wacom_w9000_data *wacom_data)
 		if (wacom_data->variant->msg_coord_num > 7)
 			input_report_abs(wacom_data->input_dev, ABS_DISTANCE, distance);
 
+		if (variant->max_tilt)
+			wacom_w9000_report_tilt(wacom_data, data);
+
 		input_report_key(wacom_data->input_dev, BTN_STYLUS, side_button);
 		input_report_key(wacom_data->input_dev, BTN_TOUCH, touch);
 		input_report_key(wacom_data->input_dev, BTN_TOOL_PEN, !rubber);
@@ -209,6 +259,11 @@ static void wacom_w9000_coord(struct wacom_w9000_data *wacom_data)
 
 		if (wacom_data->variant->msg_coord_num > 7)
 			input_report_abs(wacom_data->input_dev, ABS_DISTANCE, 255);
+
+		if (variant->max_tilt) {
+			input_report_abs(wacom_data->input_dev, ABS_TILT_X, 0);
+			input_report_abs(wacom_data->input_dev, ABS_TILT_Y, 0);
+		}
 
 		input_report_key(wacom_data->input_dev, BTN_STYLUS, 0);
 		input_report_key(wacom_data->input_dev, BTN_TOUCH, 0);
@@ -273,7 +328,8 @@ static int wacom_w9000_probe(struct i2c_client *client)
 		return -EINVAL;
 	}
 
-	if (wacom_data->variant->msg_coord_num < 7) {
+	if (wacom_data->variant->msg_coord_num < 7 ||
+	    (wacom_data->variant->max_tilt && wacom_data->variant->msg_coord_num < 10)) {
 		dev_err(dev, "Length of coordinates message for %s too short\n",
 			wacom_data->variant->name);
 		return -EINVAL;
@@ -340,10 +396,19 @@ static int wacom_w9000_probe(struct i2c_client *client)
 
 	input_set_abs_params(input_dev, ABS_X, 0, wacom_data->prop.max_x, 4, 0);
 	input_set_abs_params(input_dev, ABS_Y, 0, wacom_data->prop.max_y, 4, 0);
+	if (wacom_data->variant->pressure_mask)
+		wacom_data->max_pressure &= wacom_data->variant->pressure_mask;
 	input_set_abs_params(input_dev, ABS_PRESSURE, 0, wacom_data->max_pressure, 0, 0);
 
 	if (wacom_data->variant->msg_coord_num > 7)
 		input_set_abs_params(input_dev, ABS_DISTANCE, 0, 255, 0, 0);
+
+	if (wacom_data->variant->max_tilt) {
+		input_set_abs_params(input_dev, ABS_TILT_X, -wacom_data->variant->max_tilt,
+				     wacom_data->variant->max_tilt, 0, 0);
+		input_set_abs_params(input_dev, ABS_TILT_Y, -wacom_data->variant->max_tilt,
+				     wacom_data->variant->max_tilt, 0, 0);
+	}
 
 	touchscreen_parse_properties(input_dev, false, &wacom_data->prop);
 
@@ -412,10 +477,24 @@ static const struct wacom_w9000_variant w9007a_v1 = {
 	.name = "Wacom W9007A V1 Digitizer",
 };
 
+/*
+ * W9021: 16-byte reports with a packet ID in byte 0, a flag in bit 15 of the
+ * pressure field and tilt in bytes 8/9 (+/-63).
+ */
+static const struct wacom_w9000_variant w9021 = {
+	.cmd_query_num	= 9,
+	.msg_coord_num	= 16,
+	.pressure_mask	= GENMASK(11, 0),
+	.max_tilt	= 63,
+	.has_packet_id	= true,
+	.name = "Wacom W9021 Digitizer",
+};
+
 static const struct of_device_id wacom_w9000_of_match[] = {
 	{ .compatible = "wacom,w9002", .data = &w9002 },
 	{ .compatible = "wacom,w9007a-lt03", .data = &w9007a_lt03, },
 	{ .compatible = "wacom,w9007a-v1", .data = &w9007a_v1, },
+	{ .compatible = "wacom,w9021", .data = &w9021, },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, wacom_w9000_of_match);
@@ -424,6 +503,7 @@ static const struct i2c_device_id wacom_w9000_id[] = {
 	{ .name = "w9002", .driver_data = (kernel_ulong_t)&w9002 },
 	{ .name = "w9007a-lt03", .driver_data = (kernel_ulong_t)&w9007a_lt03 },
 	{ .name = "w9007a-v1", .driver_data = (kernel_ulong_t)&w9007a_v1 },
+	{ .name = "w9021", .driver_data = (kernel_ulong_t)&w9021 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, wacom_w9000_id);
