@@ -1,4 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-only
+
+config DRM_PANEL_BOE_TS124QDM_FT8203
+	tristate "BOE TS124QDM FT8203 DSI panel (Galaxy Tab S7 FE)"
+	depends on OF && DRM_MIPI_DSI && BACKLIGHT_CLASS_DEVICE
+	select DRM_DISPLAY_DSC_HELPER
+	select DRM_DISPLAY_HELPER
+	
 config DRM_PANEL
 	bool
 	depends on DRM
