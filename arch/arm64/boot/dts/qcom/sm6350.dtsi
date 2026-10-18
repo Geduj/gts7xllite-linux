@@ -1027,6 +1027,26 @@
 				status = "disabled";
 			};
 
+			spi6: spi@980000 {
+				compatible = "qcom,geni-spi";
+				reg = <0x0 0x00980000 0x0 0x4000>;
+				clock-names = "se";
+				clocks = <&gcc GCC_QUPV3_WRAP1_S0_CLK>;
+				pinctrl-names = "default";
+				pinctrl-0 = <&qup_spi6_default>, <&qup_spi6_cs_gpio>;
+				interrupts = <GIC_SPI 353 IRQ_TYPE_LEVEL_HIGH>;
+				dmas = <&gpi_dma1 0 0 QCOM_GPI_SPI>,
+				       <&gpi_dma1 1 0 QCOM_GPI_SPI>;
+				dma-names = "tx", "rx";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				interconnects = <&clk_virt MASTER_QUP_CORE_1 0 &clk_virt SLAVE_QUP_CORE_1 0>,
+						<&gem_noc MASTER_AMPSS_M0 0 &config_noc SLAVE_QUP_1 0>,
+						<&aggre2_noc MASTER_QUP_1 0 &clk_virt SLAVE_EBI_CH0 0>;
+				interconnect-names = "qup-core", "qup-config", "qup-memory";
+				status = "disabled";
+			};
+
 			i2c7: i2c@984000 {
 				compatible = "qcom,geni-i2c";
 				reg = <0x0 0x00984000 0x0 0x4000>;
@@ -3005,6 +3025,20 @@
 				function = "qup10";
 				drive-strength = <2>;
 				bias-pull-up;
+			};
+
+			qup_spi6_default: qup-spi6-default-state {
+				pins = "gpio13", "gpio14", "gpio15";
+				function = "qup10";
+				drive-strength = <6>;
+				bias-disable;
+			};
+
+			qup_spi6_cs_gpio: qup-spi6-cs-gpio-state {
+				pins = "gpio16";
+				function = "gpio";
+				drive-strength = <6>;
+				bias-disable;
 			};
 
 			qup_i2c7_default: qup-i2c7-default-state {
