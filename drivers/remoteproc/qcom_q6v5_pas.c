@@ -931,11 +931,12 @@ static const struct qcom_pas_data sdm845_adsp_resource_init = {
 	.ssctl_id = 0x14,
 };
 
+// remove auto boot auto boot bring up always failed
 static const struct qcom_pas_data sm6350_adsp_resource = {
 	.crash_reason_smem = 423,
 	.firmware_name = "adsp.mdt",
 	.pas_id = 1,
-	.auto_boot = true,
+	.auto_boot = false,
 	.proxy_pd_names = (char*[]){
 		"lcx",
 		"lmx",
@@ -1081,11 +1082,12 @@ static const struct qcom_pas_data sdm845_cdsp_resource_init = {
 	.ssctl_id = 0x17,
 };
 
+// remove auto boot auto boot bring up always failed
 static const struct qcom_pas_data sm6350_cdsp_resource = {
 	.crash_reason_smem = 601,
 	.firmware_name = "cdsp.mdt",
 	.pas_id = 18,
-	.auto_boot = true,
+	.auto_boot = false,
 	.proxy_pd_names = (char*[]){
 		"cx",
 		"mx",
