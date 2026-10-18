@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * gts7xllite: SM5714 IF-PMIC (charger + fuel gauge + MUIC) on QUP SE7 I2C
+ * Include from the board DTS, or paste into it.
+ */
+
+/ {
+	battery: battery {
+		compatible = "simple-battery";
+		device-chemistry = "lithium-ion";
+		/* Samsung sec-battery: battery_full_capacity 10090 mAh, float 4380 mV */
+		charge-full-design-microamp-hours = <10090000>;
+		voltage-max-design-microvolt = <4380000>;
+		voltage-min-design-microvolt = <3400000>;
+	};
+};
+
+&i2c7 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	pmic@49 {
+		compatible = "siliconmitus,sm5714";
+		reg = <0x49>;
+
+		/* Shared IRQ (TLMM 84, active low); not used by the drivers yet. */
+		/* interrupts-extended = <&tlmm 84 IRQ_TYPE_LEVEL_LOW>; */
+
+		fuel-gauge {
+			compatible = "siliconmitus,sm5714-fuel-gauge";
+			monitored-battery = <&battery>;
+		};
+	};
+
+	/* SM5440 direct charger @ 0x63: no driver */
+};

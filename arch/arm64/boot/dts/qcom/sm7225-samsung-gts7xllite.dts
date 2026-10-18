@@ -1,0 +1,592 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Samsung Galaxy Tab S7 FE LTE (SM-T735, gts7xllite)
+ *
+ * FIRST-BOOT DRAFT: CPU, memory, regulators, UFS, USB (peripheral),
+ * buttons, and the bootloader splash as a simple framebuffer.
+ * Everything else is intentionally left out.
+ *
+ * Values taken from the downstream Samsung DTB (board-id 8/5).
+ */
+
+/* PMK8350 (in reality a PMK8003) is configured to use SID6 instead of 0 */
+#define PMK8350_SID 6
+
+/dts-v1/;
+
+#include <dt-bindings/firmware/qcom,scm.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include "sm7225.dtsi"
+#include "pm6350.dtsi"
+#include "pmk8350.dtsi"
+#include "gts7xllite-sm5714.dtsi"
+
+/delete-node/ &cont_splash_memory;
+
+/ {
+	model = "Samsung GTS7XLLITE PROJECT (board-id,05)";
+	compatible = "samsung,gts7xllite", "qcom,sm7225",
+		     "qcom,lagoon-mtp", "qcom,lagoon", "qcom,mtp";
+	chassis-type = "tablet";
+
+	qcom,msm-id = <434 0x10000>, <459 0x10000>;
+	qcom,board-id = <8 5>;
+	dtbo-version = <0>;
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		stdout-path = "framebuffer0";
+
+		/* Bootloader splash (cont_splash_region), panel 1600x2560 */
+		framebuffer0: framebuffer@a0000000 {
+			compatible = "simple-framebuffer";
+			reg = <0 0xa0000000 0 (1600 * 2560 * 4)>;
+			width = <1600>;
+			height = <2560>;
+			stride = <(1600 * 4)>;
+			format = "a8r8g8b8";
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-0 = <&vol_up_n>;
+		pinctrl-names = "default";
+
+		key-volume-up {
+			label = "Volume Up";
+			gpios = <&pm6350_gpios 2 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+			debounce-interval = <15>;
+		};
+	};
+
+	reserved-memory {
+		/* Fairphone ramoops from sm6350.dtsi: drop it so ours is the only one */
+		/delete-node/ ramoops@ffc00000;
+		/delete-node/ memory@c0000000;
+		/delete-node/ fastuh_heap;
+
+		/* Samsung relocates the DSP carveouts (stock overlay fragments 118-122) */
+		/delete-node/ memory@86000000;	/* pil_camera_mem */
+		/delete-node/ memory@86500000;	/* pil_npu_mem */
+		/delete-node/ memory@86a00000;	/* pil_video_mem */
+		/delete-node/ memory@86f00000;	/* pil_cdsp_mem */
+		/delete-node/ memory@88d00000;	/* pil_adsp_mem */
+
+		pil_adsp_mem: memory@84800000 {
+			reg = <0 0x84800000 0 0x4000000>;
+			no-map;
+		};
+
+		pil_camera_mem: memory@88800000 {
+			reg = <0 0x88800000 0 0x500000>;
+			no-map;
+		};
+
+		pil_npu_mem: memory@88d00000 {
+			reg = <0 0x88d00000 0 0x500000>;
+			no-map;
+		};
+
+		pil_video_mem: memory@89200000 {
+			reg = <0 0x89200000 0 0x500000>;
+			no-map;
+		};
+
+		pil_cdsp_mem: memory@89700000 {
+			reg = <0 0x89700000 0 0x1e00000>;
+			no-map;
+		};
+
+		/* Samsung GPU firmware region */
+		pil-gpu-samsung@8b715400 {
+			reg = <0 0x8b715400 0 0x2000>;
+			no-map;
+		};
+
+		/* Splash buffer: must stay untouched for simplefb */
+			cont_splash_memory: cont_splash_region {
+			reg = <0 0xa0000000 0 0x2300000>;
+			label = "cont_splash_region";
+			no-map;
+		};
+
+		/* Samsung-specific carveouts (secure world / uH / debug) */
+		hdm@9fb00000 {
+			reg = <0 0x9fb00000 0 0x1000>;
+			no-map;
+		};
+
+		fastuh-region@b0200000 {
+			reg = <0 0xb0200000 0 0x200000>;
+			no-map;
+		};
+
+		tima@b0c00000 {
+			reg = <0 0xb0c00000 0 0x100000>;
+			no-map;
+		};
+
+		kaslr@b0fff000 {
+			reg = <0 0xb0fff000 0 0x1000>;
+			no-map;
+		};
+
+		sec-debug@b1000000 {
+			reg = <0 0xb1000000 0 0x900000>;
+			no-map;
+		};
+
+		ss-plog@b1900000 {
+			reg = <0 0xb1900000 0 0x200000>;
+			no-map;
+		};
+
+		/* Same region as Samsung's ramoops: readable from OrangeFox after a crash */
+		ramoops@b1b00000 {
+			compatible = "ramoops";
+			reg = <0 0xb1b00000 0 0x100000>;
+			record-size = <0x40000>;
+			console-size = <0x40000>;
+			ftrace-size = <0x40000>;
+			pmsg-size = <0x40000>;
+		};
+
+		/* Samsung bootloader adding fastuh-heap by itself */
+		/* fastuh-heap@b2000000 {
+			reg = <0 0xb2000000 0 0xe00000>;
+			no-map;
+		}; */
+
+		removed@c0000000 {
+			reg = <0 0xc0000000 0 0x5e00000>;
+			no-map;
+		};
+
+		modem-shared@d0000000 {
+			reg = <0 0xd0000000 0 0x6000000>;
+			no-map;
+		};
+
+		/* rmtfs: modem EFS buffer (downstream qcom,rmtfs_sharedmem, 0x280000 + guard pages) */
+		rmtfs_mem: rmtfs@9c8ff000 {
+			compatible = "qcom,rmtfs-mem";
+			reg = <0 0x9c8ff000 0 0x282000>;
+			no-map;
+
+			qcom,client-id = <1>;
+			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
+			qcom,use-guard-pages;
+		};
+	};
+
+	/* Samsung panel (FT8203 regulator) */
+	panel_vsp: regulator-panel-vsp {
+		compatible = "regulator-fixed";
+		regulator-name = "panel_buck_en";
+		gpio = <&tlmm 88 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+		pinctrl-0 = <&panel_vsp_en>;
+		pinctrl-names = "default";
+	};
+
+	panel_vsn: regulator-panel-vsn {
+		compatible = "regulator-fixed";
+		regulator-name = "panel_buck_en2";
+		gpio = <&tlmm 89 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+		pinctrl-0 = <&panel_vsn_en>;
+		pinctrl-names = "default";
+	};
+
+	panel_boost: regulator-panel-boost {
+		compatible = "regulator-fixed";
+		regulator-name = "panel_boost_en";
+		gpio = <&tlmm 72 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+		pinctrl-0 = <&panel_boost_en>;
+		pinctrl-names = "default";
+	};
+};
+
+&apps_rsc {
+	regulators-0 {
+		compatible = "qcom,pm6350-rpmh-regulators";
+		qcom,pmic-id = "a";
+
+		vreg_l2a: ldo2 {
+			regulator-name = "vreg_l2a";
+			regulator-min-microvolt = <1503000>;
+			regulator-max-microvolt = <1980000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l3a: ldo3 {
+			regulator-name = "vreg_l3a";
+			regulator-min-microvolt = <2700000>;
+			regulator-max-microvolt = <3300000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* WCN3990 CX/MX (downstream pm6350_l4) */
+		vreg_l4a: ldo4 {
+			regulator-name = "vreg_l4a";
+			regulator-min-microvolt = <352000>;
+			regulator-max-microvolt = <800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* WCN3990 XO 1.8 V (downstream pm6350_l7, 1.62-1.98 V) */
+		vreg_l7a: ldo7 {
+			regulator-name = "vreg_l7a";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l10a: ldo10 {
+			regulator-name = "vreg_l10a";
+			regulator-min-microvolt = <3296000>;
+			regulator-max-microvolt = <3304000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+
+		vreg_l12a: ldo12 {
+			regulator-name = "vreg_l12a";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* panel_ldo_en downstream: keep on so the splash stays visible */
+		vreg_l14a: ldo14 {
+			regulator-name = "vreg_l14a";
+			regulator-min-microvolt = <1896000>;
+			regulator-max-microvolt = <1904000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+			regulator-boot-on;
+		};
+
+		vreg_l18a: ldo18 {
+			regulator-name = "vreg_l18a";
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <1049000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l22a: ldo22 {
+			regulator-name = "vreg_l22a";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1305000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+		
+	};
+
+	/* Downstream calls it "pm6150a", resources are ldoeX/smpeX = pm6150l at id "e" */
+	regulators-1 {
+		compatible = "qcom,pm6150l-rpmh-regulators";
+		qcom,pmic-id = "e";
+
+		vreg_l1e: ldo1 {
+			regulator-name = "vreg_l1e";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+
+		/* WCN3990 RF 1.3 V (downstream pm6150a_l2, config 1.224-1.304 V) */
+		vreg_l2e: ldo2 {
+			regulator-name = "vreg_l2e";
+			regulator-min-microvolt = <1224000>;
+			regulator-max-microvolt = <1304000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* microSD I/O (downstream pm6150a_l6) */
+		vreg_l6e: ldo6 {
+			regulator-name = "vreg_l6e";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <2952000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* UFS VCC */
+		vreg_l7e: ldo7 {
+			regulator-name = "vreg_l7e";
+			regulator-min-microvolt = <2952000>;
+			regulator-max-microvolt = <2960000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l8e: ldo8 {
+			regulator-name = "vreg_l8e";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+
+		/* microSD card power (downstream pm6150a_l9) */
+		vreg_l9e: ldo9 {
+			regulator-name = "vreg_l9e";
+			regulator-min-microvolt = <2960000>;
+			regulator-max-microvolt = <2960000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* WCN3990 RF chain 0, 3.3 V (downstream pm6150a_l10, config 3.0-3.3 V) */
+		vreg_l10e: ldo10 {
+			regulator-name = "vreg_l10e";
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3304000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		
+	};
+};
+
+&pmk8350_rtc {
+	status = "okay";
+};
+
+/* pm6350's PON already handles power and volume-down; avoid a second PON driver */
+&pmk8350_pon {
+	status = "disabled";
+};
+
+&sdhc_2 {
+	vmmc-supply = <&vreg_l9e>;
+	vqmmc-supply = <&vreg_l6e>;
+	cd-gpios = <&tlmm 94 GPIO_ACTIVE_LOW>;
+
+	pinctrl-0 = <&sdc2_on_state>, <&sdc2_card_det_n>;
+	pinctrl-1 = <&sdc2_off_state>, <&sdc2_card_det_n>;
+	pinctrl-names = "default", "sleep";
+
+	status = "okay";
+};
+
+&tlmm {
+	gpio-reserved-ranges = <13 4>, <86 2>;
+
+	/* microSD card detect: Samsung's cd_on (gpio94, 2 mA, pull-up) */
+	sdc2_card_det_n: sdc2-card-det-state {
+		pins = "gpio94";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+
+	/* Samsung panel (FT8203) */
+	panel_boost_en: panel-boost-en-state {
+		pins = "gpio72";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	panel_reset_default: panel-reset-state {
+		pins = "gpio73";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	panel_vsp_en: panel-vsp-en-state {
+		pins = "gpio88";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	panel_vsn_en: panel-vsn-en-state {
+		pins = "gpio89";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};
+
+&pm6350_gpios {
+	vol_up_n: vol-up-n-state {
+		pins = "gpio2";
+		function = "normal";
+		power-source = <0>;
+		bias-pull-up;
+		input-enable;
+	};
+};
+
+&pm6350_resin {
+	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
+};
+
+&tlmm {
+	/* From downstream gpio-reserved-ranges */
+	gpio-reserved-ranges = <13 4>, <86 2>;
+};
+
+&ufs_mem_hc {
+	/* TODO: confirm GPIO against sm7225-fairphone-fp4.dts */
+	reset-gpios = <&tlmm 156 GPIO_ACTIVE_LOW>;
+
+	vcc-supply = <&vreg_l7e>;
+	vcc-max-microamp = <800000>;
+	vccq2-supply = <&vreg_l12a>;
+	vccq2-max-microamp = <800000>;
+
+	status = "okay";
+};
+
+&ufs_mem_phy {
+	vdda-phy-supply = <&vreg_l18a>;
+	vdda-pll-supply = <&vreg_l22a>;
+
+	status = "okay";
+};
+
+&usb_1 {
+	/* USB2-only: take the pipe clock from the HS PHY (no USB3 PHY in use) */
+	qcom,select-utmi-as-pipe-clk;
+	status = "okay";
+};
+
+/* Peripheral-only, USB2-only: enough for USB networking, no Type-C driver needed */
+&usb_1_dwc3 {
+	dr_mode = "peripheral";
+	maximum-speed = "high-speed";
+	phys = <&usb_1_hsphy>;
+	phy-names = "usb2-phy";
+};
+
+&usb_1_hsphy {
+	vdd-supply = <&vreg_l18a>;
+	vdda-pll-supply = <&vreg_l2a>;
+	vdda-phy-dpdm-supply = <&vreg_l3a>;
+
+	status = "okay";
+};
+
+&mdss {
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	vdda-supply = <&vreg_l22a>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "boe,ts124qdm-ft8203";
+		reg = <0>;
+
+		vddi-supply = <&vreg_l14a>;
+		vsp-supply = <&panel_vsp>;
+		vsn-supply = <&panel_vsn>;
+		boost-supply = <&panel_boost>;
+		reset-gpios = <&tlmm 73 GPIO_ACTIVE_LOW>;
+
+		pinctrl-0 = <&panel_reset_default>;
+		pinctrl-names = "default";
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&mdss_dsi0_out>;
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	data-lanes = <0 1 2 3>;
+	remote-endpoint = <&panel_in>;
+};
+
+&mdss_dsi0_phy {
+	vdds-supply = <&vreg_l18a>;
+	status = "okay";
+};
+
+&ipa {
+	qcom,gsi-loader = "self";
+	memory-region = <&pil_ipa_fw_mem>;
+	firmware-name = "qcom/sm7225/gts7xllite/lagoon_ipa_fws.mdt";
+	status = "okay";
+};
+
+/* ------------------------------------------------------------------ */
+&adsp {
+	firmware-name = "qcom/sm7225/gts7xllite/adsp.mdt";
+	status = "okay";
+};
+
+&cdsp {
+	firmware-name = "qcom/sm7225/gts7xllite/cdsp.mdt";
+	status = "okay";
+};
+
+&mpss {
+	firmware-name = "qcom/sm7225/gts7xllite/modem.mdt";
+	status = "okay";
+};
+
+&wifi {
+	interrupts = <GIC_SPI 414 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 415 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 416 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 417 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 418 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 419 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 420 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 421 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 422 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 423 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 424 IRQ_TYPE_EDGE_RISING>,
+		     <GIC_SPI 425 IRQ_TYPE_EDGE_RISING>;
+
+	vdd-0.8-cx-mx-supply = <&vreg_l4a>;
+	vdd-1.8-xo-supply = <&vreg_l7a>;
+	vdd-1.3-rfa-supply = <&vreg_l2e>;
+	vdd-3.3-ch0-supply = <&vreg_l10e>;
+	qcom,calibration-variant = "samsung_gts7xllite";
+	status = "okay";
+};
+/* ------------------------------------------------------------------ */
+
+&qupv3_id_0 {
+	status = "okay";
+};
+
+&qupv3_id_1 {
+	status = "okay";
+};
+
+&i2c2 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	/* SM5714 USB-PD @ 33 (IRQ TLMM 7) */
+};
+
+&i2c7 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	/* SM5714 MFD @ 49 (IRQ TLMM 84) */
+	/* SM5440 direct charger @ 63 */
+};
