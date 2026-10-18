@@ -24,6 +24,7 @@ properties:
       - wacom,w9002
       - wacom,w9007a-lt03
       - wacom,w9007a-v1
+      - wacom,w9021
 
   reg:
     maxItems: 1
