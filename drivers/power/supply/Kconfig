@@ -542,6 +542,13 @@ config CHARGER_ISP1704
 	  Say Y to enable support for USB Charger Detection with
 	  ISP1707/ISP1704 USB transceivers.
 
+config BATTERY_SM5714
+	tristate "Silicon Mitus SM5714 fuel gauge"
+	depends on MFD_SM5714
+	help
+	  Fuel gauge driver for the Silicon Mitus SM5714. Read-only: relies
+	  on the gauge having been initialised by the vendor firmware.
+
 config CHARGER_MAX8903
 	tristate "MAX8903 Battery DC-DC Charger for USB and Adapter Power"
 	help
