@@ -553,6 +553,7 @@ static const struct qcom_pdm_domain_data *sm6350_domains[] = {
 	&adsp_root_pd,
 	&adsp_sensor_pd,
 	&cdsp_root_pd,
+	&mpss_root_pd_gps,
 	&mpss_wlan_pd,
 	NULL,
 };

@@ -15,6 +15,18 @@ menuconfig QCOM_SOC
 
 if QCOM_SOC
 
+config QCOM_MEMSHARE
+	tristate "Qualcomm memshare QMI service"
+	depends on ARCH_QCOM || COMPILE_TEST
+	depends on QCOM_SCM
+	select QCOM_QMI_HELPERS
+	help
+	  Registers the MEM_SHARE QMI service (0x34) on the application
+	  processor. Some modem firmware builds request extra DDR from
+	  HLOS through this service and stall if it is missing.
+
+	  Say M here if your modem firmware contains a memshare client.
+	  
 config QCOM_AOSS_QMP
 	tristate "Qualcomm AOSS Driver"
 	depends on MAILBOX
