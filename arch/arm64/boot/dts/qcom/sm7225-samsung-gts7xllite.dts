@@ -382,7 +382,7 @@
 };
 
 &tlmm {
-	gpio-reserved-ranges = <13 4>, <86 2>;
+	gpio-reserved-ranges = <86 2>;
 
 	/* microSD card detect: Samsung's cd_on (gpio94, 2 mA, pull-up) */
 	sdc2_card_det_n: sdc2-card-det-state {
@@ -420,6 +420,21 @@
 		drive-strength = <2>;
 		bias-disable;
 	};
+
+	/* Touch (FT8203 TDDI, SPI on QUP SE6) */
+	ts_int_default: ts-int-state {
+		pins = "gpio22";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+
+	ts_reset_default: ts-reset-state {
+		pins = "gpio18";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
 };
 
 &pm6350_gpios {
@@ -435,11 +450,6 @@
 &pm6350_resin {
 	linux,code = <KEY_VOLUMEDOWN>;
 	status = "okay";
-};
-
-&tlmm {
-	/* From downstream gpio-reserved-ranges */
-	gpio-reserved-ranges = <13 4>, <86 2>;
 };
 
 &ufs_mem_hc {
@@ -483,6 +493,8 @@
 	status = "okay";
 };
 
+/* ------------------------------------------------------------------ */
+/* FT8203 SCREEN */
 &mdss {
 	status = "okay";
 };
@@ -491,7 +503,7 @@
 	vdda-supply = <&vreg_l22a>;
 	status = "okay";
 
-	panel@0 {
+	panel: panel@0 {
 		compatible = "boe,ts124qdm-ft8203";
 		reg = <0>;
 
@@ -521,6 +533,30 @@
 	vdds-supply = <&vreg_l18a>;
 	status = "okay";
 };
+
+/* touch screen use SPI instead of I2C*/
+&spi6 {		/* QUP SE6, use the label from sm6350.dtsi */
+	status = "okay";
+	cs-gpios = <&tlmm 16 GPIO_ACTIVE_LOW>;
+
+	touchscreen@0 {
+		compatible = "focaltech,ft8203";
+		reg = <0>;
+		spi-max-frequency = <6000000>;
+		interrupts-extended = <&tlmm 22 IRQ_TYPE_EDGE_FALLING>;
+		reset-gpios = <&tlmm 18 GPIO_ACTIVE_LOW>;
+		touchscreen-size-x = <1600>;
+		touchscreen-size-y = <2560>;
+		firmware-name = "tsp_focaltech/ft8203_gts7xllite.bin";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&ts_int_default>, <&ts_reset_default>;
+
+		panel = <&panel>;
+	};
+};
+
+/* ------------------------------------------------------------------ */
 
 &ipa {
 	qcom,gsi-loader = "self";
@@ -567,7 +603,7 @@
 	status = "okay";
 };
 /* ------------------------------------------------------------------ */
-
+/* sm5714 fuel guage */
 &qupv3_id_0 {
 	status = "okay";
 };
@@ -590,3 +626,15 @@
 	/* SM5714 MFD @ 49 (IRQ TLMM 84) */
 	/* SM5440 direct charger @ 63 */
 };
+
+/* ------------------------------------------------------------------ */
+/* GPU and zap shader */
+&gpu {
+	status = "okay";
+};
+
+&gpu_zap_shader {
+	firmware-name = "qcom/sm7225/gts7xllite/a615_zap.mdt";
+};
+
+/* ------------------------------------------------------------------ */
