@@ -254,6 +254,14 @@
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
+		/* WACOM E PEN */
+		vreg_l8a: ldo8 {
+			regulator-name = "vreg_l8a";		/* wacom_avdd, 3.3 V */
+			regulator-min-microvolt = <3296000>;
+			regulator-max-microvolt = <3304000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
 		vreg_l10a: ldo10 {
 			regulator-name = "vreg_l10a";
 			regulator-min-microvolt = <3296000>;
@@ -435,6 +443,14 @@
 		drive-strength = <2>;
 		bias-disable;
 	};
+
+	/* WACOM PEN W9021 */
+	pen_int_default: pen-int-default-state { 
+	pins = "gpio85";
+	function = "gpio";
+	bias-disable;
+	input-enable;
+};
 };
 
 &pm6350_gpios {
@@ -612,6 +628,18 @@
 	status = "okay";
 };
 
+/* ------------------------------------------------------------------ */
+/* GPU and zap shader */
+&gpu {
+	status = "okay";
+};
+
+&gpu_zap_shader {
+	firmware-name = "qcom/sm7225/gts7xllite/a615_zap.mdt";
+};
+
+/* ------------------------------------------------------------------ */
+
 &i2c2 {
 	clock-frequency = <400000>;
 	status = "okay";
@@ -627,14 +655,40 @@
 	/* SM5440 direct charger @ 63 */
 };
 
-/* ------------------------------------------------------------------ */
-/* GPU and zap shader */
-&gpu {
+&i2c8 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	digitizer@56 {
+		compatible = "wacom,w9021";
+		reg = <0x56>;
+
+		interrupts-extended = <&tlmm 85 IRQ_TYPE_LEVEL_LOW>;
+		pinctrl-0 = <&pen_int_default>;
+		pinctrl-names = "default";
+
+		vdd-supply = <&vreg_l8a>;
+
+		/*
+		 * FWE (flash-mode) is TLMM 86: still in gpio-reserved-ranges and
+		 * held low by the board, so it is left out (optional property).
+		 */
+
+		/* raw chip X runs bottom->top along the 266 mm side, raw Y left->right */
+		touchscreen-inverted-x;
+		touchscreen-swapped-x-y;
+		touchscreen-x-mm = <266>;
+		touchscreen-y-mm = <166>;
+	};
+
+	/* WACOM EPEN */
+	/* THIS NEED gpi_dma1 enabled */
+};
+
+&gpi_dma0 {
 	status = "okay";
 };
 
-&gpu_zap_shader {
-	firmware-name = "qcom/sm7225/gts7xllite/a615_zap.mdt";
+&gpi_dma1 {
+	status = "okay";
 };
-
-/* ------------------------------------------------------------------ */
