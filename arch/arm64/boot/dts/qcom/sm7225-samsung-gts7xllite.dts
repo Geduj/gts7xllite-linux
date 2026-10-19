@@ -450,7 +450,7 @@
 	function = "gpio";
 	bias-disable;
 	input-enable;
-};
+	};
 };
 
 &pm6350_gpios {
@@ -531,6 +531,8 @@
 
 		pinctrl-0 = <&panel_reset_default>;
 		pinctrl-names = "default";
+
+		samsung,boost = <&disp_boost>;
 
 		port {
 			panel_in: endpoint {
@@ -658,6 +660,12 @@
 &i2c8 {
 	clock-frequency = <400000>;
 	status = "okay";
+
+	/* MAX77816 buck-boost: backlight 5 V input, programmed by the panel driver */
+	disp_boost: regulator@18 {
+		compatible = "maxim,max77816";
+		reg = <0x18>;
+	};
 
 	digitizer@56 {
 		compatible = "wacom,w9021";
