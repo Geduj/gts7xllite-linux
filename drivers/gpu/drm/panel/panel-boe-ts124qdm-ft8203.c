@@ -14,6 +14,8 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/regulator/consumer.h>
+#include <linux/i2c.h>
+#include <linux/of.h>
 
 #include <drm/display/drm_dsc.h>
 #include <drm/drm_mipi_dsi.h>
@@ -28,7 +30,7 @@
  * 12-bit is the usual for this controller family. Adjust after checking
  * Samsung's brightness code if the range turns out wrong.
  */
-#define FT8203_MAX_BRIGHTNESS	4095
+#define FT8203_MAX_BRIGHTNESS 	3231
 #define FT8203_DEF_BRIGHTNESS	2048
 
 static const struct regulator_bulk_data ft8203_supplies[] = {
@@ -44,6 +46,7 @@ struct ft8203 {
 	struct drm_dsc_config dsc;
 	struct regulator_bulk_data *supplies;
 	struct gpio_desc *reset_gpio;
+	struct i2c_client *boost;	/* MAX77816 on I2C8, optional */
 };
 
 static inline struct ft8203 *to_ft8203(struct drm_panel *panel)
@@ -407,12 +410,12 @@ static int ft8203_on(struct ft8203 *ctx)
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xff, 0x00, 0x00);
 	mipi_dsi_dcs_exit_sleep_mode_multi(&dsi_ctx);
 	mipi_dsi_msleep(&dsi_ctx, 128);
-	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x35, 0x00);
-	mipi_dsi_msleep(&dsi_ctx, 32);
+	// mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
+	// mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x35, 0x00);
+	// mipi_dsi_msleep(&dsi_ctx, 32);
 
-	/* samsung,tft_pwm_tx_cmds: BCTRL | DD | BL on */
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x24);
+	// /* samsung,tft_pwm_tx_cmds: BCTRL | DD | BL on */
+	// mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x24);
 
 	return dsi_ctx.accum_err;
 }
@@ -460,6 +463,17 @@ static int ft8203_prepare(struct drm_panel *panel)
 	 *	mipi_dsi_compression_mode(ctx->dsi, true);
 	 */
 
+	if (ctx->boost) {
+		/* MAX77816 VOUT = 5.0 V as stock; the 0x23 default is too low for
+		 * the backlight driver to start at low PWM after power-on */
+		ret = i2c_smbus_write_byte_data(ctx->boost, 0x04, 0x78);
+		if (ret)
+			dev_warn(&ctx->dsi->dev, "boost write failed: %d\n", ret);
+		else
+			dev_dbg(&ctx->dsi->dev, "boost VOUT 0x%02x\n",
+				 i2c_smbus_read_byte_data(ctx->boost, 0x04));
+	}
+
 	return 0;
 }
 
@@ -475,6 +489,25 @@ static int ft8203_unprepare(struct drm_panel *panel)
 	ft8203_power_off(ctx);
 
 	return 0;
+}
+
+static int ft8203_enable(struct drm_panel *panel)
+{
+	struct ft8203 *ctx = to_ft8203(panel);
+	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
+	u16 v = clamp_t(u16, ctx->panel.backlight->props.brightness, 32,
+			FT8203_MAX_BRIGHTNESS);
+	u8 pwm[3] = { MIPI_DCS_SET_DISPLAY_BRIGHTNESS, v >> 4, v & 0x0f };
+	/* first BL-on after power-on must be without dimming (DD=0), or it latches dim */
+	u8 ctrl[2] = { MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x24 };
+
+	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
+	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x35, 0x00);	/* TE on */
+	mipi_dsi_dcs_write_buffer_multi(&dsi_ctx, pwm, sizeof(pwm));
+	mipi_dsi_dcs_write_buffer_multi(&dsi_ctx, ctrl, sizeof(ctrl));
+	mipi_dsi_msleep(&dsi_ctx, 80);	/* let the BL start before dimming is enabled */
+
+	return dsi_ctx.accum_err;
 }
 
 static const struct drm_display_mode ft8203_mode = {
@@ -500,6 +533,7 @@ static int ft8203_get_modes(struct drm_panel *panel,
 
 static const struct drm_panel_funcs ft8203_panel_funcs = {
 	.prepare = ft8203_prepare,
+	.enable = ft8203_enable,
 	.unprepare = ft8203_unprepare,
 	.get_modes = ft8203_get_modes,
 };
@@ -507,9 +541,27 @@ static const struct drm_panel_funcs ft8203_panel_funcs = {
 static int ft8203_bl_update_status(struct backlight_device *bl)
 {
 	struct mipi_dsi_device *dsi = bl_get_data(bl);
-	u16 brightness = backlight_get_brightness(bl);
+	u16 v = backlight_get_brightness(bl);		/* 0..3231 */
+	u8 pwm[2], dim[1];
+	ssize_t ret;
 
-	return mipi_dsi_dcs_set_display_brightness_large(dsi, brightness);
+	if (v == 0)
+   		return 0;
+   	if (v < 32)
+   		v = 32;
+
+	pwm[0] = v >> 4;
+	pwm[1] = v & 0x0f;
+	dim[0] = v > 14 ? 0x2c : 0x24;
+
+	dev_dbg(&dsi->dev, "bl update %u\n", v);	/* debug */
+
+	ret = mipi_dsi_dcs_write(dsi, MIPI_DCS_SET_DISPLAY_BRIGHTNESS, pwm, 2);
+	if (ret < 0)
+		return ret;
+
+	ret = mipi_dsi_dcs_write(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY, dim, 1);
+	return ret < 0 ? ret : 0;
 }
 
 static const struct backlight_ops ft8203_bl_ops = {
@@ -530,9 +582,17 @@ ft8203_create_backlight(struct mipi_dsi_device *dsi)
 					      &ft8203_bl_ops, &props);
 }
 
+static void ft8203_put_boost(void *data)
+{
+	struct i2c_client *client = data;
+
+	put_device(&client->dev);
+}
+
 static int ft8203_probe(struct mipi_dsi_device *dsi)
 {
 	struct device *dev = &dsi->dev;
+	struct device_node *np;
 	struct ft8203 *ctx;
 	int ret;
 
@@ -556,13 +616,27 @@ static int ft8203_probe(struct mipi_dsi_device *dsi)
 		return dev_err_probe(dev, PTR_ERR(ctx->reset_gpio),
 				     "failed to get reset-gpios\n");
 
+	/* Optional MAX77816 backlight boost on I2C8 (stock sets VOUT 5 V) */
+	np = of_parse_phandle(dev->of_node, "samsung,boost", 0);
+	if (np) {
+		ctx->boost = of_find_i2c_device_by_node(np);
+		of_node_put(np);
+		if (!ctx->boost)
+			return dev_err_probe(dev, -EPROBE_DEFER,
+					     "boost i2c device not ready\n");
+		ret = devm_add_action_or_reset(dev, ft8203_put_boost, ctx->boost);
+		if (ret)
+			return ret;
+	}
+
 	ctx->dsi = dsi;
 	mipi_dsi_set_drvdata(dsi, ctx);
 
 	dsi->lanes = 4;
 	dsi->format = MIPI_DSI_FMT_RGB888;
-	/* non_burst_sync_event, EoT appended, init sent in LP */
-	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_LPM;
+	/* non-burst sync pulse (stock default), EoT appended, init sent in LP */
+	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_SYNC_PULSE |
+			  MIPI_DSI_MODE_LPM;
 
 	ctx->panel.prepare_prev_first = true;
 
@@ -583,7 +657,7 @@ static int ft8203_probe(struct mipi_dsi_device *dsi)
 	ctx->dsc.bits_per_pixel = 8 << 4;	/* 4 fractional bits */
 	ctx->dsc.block_pred_enable = false;	/* not set downstream for FT8203 */
 	dsi->dsc = &ctx->dsc;
-	dsi->dsc_slice_per_pkt = 2;	/* qcom,mdss-dsc-slice-per-pkt = <2> */
+	dsi->dsc_slice_per_pkt = 2;		/* qcom,mdss-dsc-slice-per-pkt = <2> */
 
 	ret = mipi_dsi_attach(dsi);
 	if (ret < 0) {

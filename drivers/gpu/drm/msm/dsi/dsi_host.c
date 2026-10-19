@@ -1153,6 +1153,12 @@ static void dsi_sw_reset(struct msm_dsi_host *msm_host)
 		dsi_write(msm_host, REG_DSI_CTRL, ctrl);
 		wmb();	/* make sure dsi controller enabled again */
 	}
+
+	/* keep HS TX timer as downstream (sw_reset wipes it) */
+	if (msm_host->cfg_hnd->major == MSM_DSI_VER_MAJOR_6G)
+		dsi_write(msm_host, REG_DSI_HS_TIMER_CTRL,
+				DSI_HS_TIMER_CTRL_HS_TX_TO(0xfd08) |
+				DSI_HS_TIMER_CTRL_TIMER_RESOLUTION(3));
 }
 
 static void dsi_op_mode_config(struct msm_dsi_host *msm_host,
@@ -1436,12 +1442,46 @@ int dsi_dma_base_get_v2(struct msm_dsi_host *msm_host, uint64_t *dma_base)
 	return 0;
 }
 
+/* DSI_DMA_SCHEDULE_CTRL: 0x100 physical; mainline 6G offsets are -4 (io_offset) */
+#define REG_DSI_DMA_SCHEDULE_CTRL	0xfc
+#define DSI_DMA_SCHEDULE_EN		BIT(28)
+
+/*
+ * On 6G v2.2+ hosts the command DMA can be held in hardware until a given
+ * video line. Use it to place commands in the vertical front porch, as the
+ * downstream driver does. Panels with very short vertical blanking cannot
+ * be hit reliably with the wait-for-video-done + sleep fallback.
+ */
+static bool dsi_schedule_dma_cmd(struct msm_dsi_host *msm_host)
+{
+	const struct msm_dsi_cfg_handler *cfg_hnd = msm_host->cfg_hnd;
+	const struct drm_display_mode *mode = msm_host->mode;
+	u32 line;
+
+	if (cfg_hnd->major != MSM_DSI_VER_MAJOR_6G ||
+	    cfg_hnd->minor < MSM_DSI_6G_VER_MINOR_V2_2_1 ||
+	    !(msm_host->mode_flags & MIPI_DSI_MODE_VIDEO) || !mode ||
+	    !(msm_host->power_on && msm_host->enabled)) {
+		dsi_write(msm_host, REG_DSI_DMA_SCHEDULE_CTRL, 0);
+		return false;
+	}
+
+	line = (mode->vsync_end - mode->vsync_start) +	/* vsync */
+	       (mode->vtotal - mode->vsync_end) +	/* vbp   */
+	       mode->vdisplay + 1;
+
+	dsi_write(msm_host, REG_DSI_DMA_SCHEDULE_CTRL,
+		  DSI_DMA_SCHEDULE_EN | (line & 0xffff));
+	return true;
+}
+
 static int dsi_cmd_dma_tx(struct msm_dsi_host *msm_host, int len)
 {
 	const struct msm_dsi_cfg_handler *cfg_hnd = msm_host->cfg_hnd;
 	int ret;
 	uint64_t dma_base;
 	bool triggered;
+	bool scheduled;
 
 	ret = cfg_hnd->ops->dma_base_get(msm_host, &dma_base);
 	if (ret) {
@@ -1451,18 +1491,30 @@ static int dsi_cmd_dma_tx(struct msm_dsi_host *msm_host, int len)
 
 	reinit_completion(&msm_host->dma_comp);
 
-	dsi_wait4video_eng_busy(msm_host);
+	scheduled = dsi_schedule_dma_cmd(msm_host);
+	if (!scheduled)
+		dsi_wait4video_eng_busy(msm_host);
 
+	t0 = ktime_get();
 	triggered = msm_dsi_manager_cmd_xfer_trigger(
 						msm_host->id, dma_base, len);
 	if (triggered) {
 		ret = wait_for_completion_timeout(&msm_host->dma_comp,
-					msecs_to_jiffies(200));
+					msecs_to_jiffies(200));		
 		DBG("ret=%d", ret);
-		if (ret == 0)
+		if (ret == 0) {
 			ret = -ETIMEDOUT;
-		else
+		} else {
 			ret = len;
+			/*
+			 * A scheduled transfer completes right at the schedule
+			 * line. Triggering the next command that close to it
+			 * misfires (downstream avoids [sched - latency,
+			 * sched + 1]), so step ~30-45 lines past it first.
+			 */
+			if (scheduled)
+				usleep_range(200, 300);
+		}
 	} else {
 		ret = len;
 	}
@@ -2172,7 +2224,13 @@ int msm_dsi_host_xfer_prepare(struct mipi_dsi_host *host,
 	 * mdp clock need to be enabled to receive dsi interrupt
 	 */
 	pm_runtime_get_sync(&msm_host->pdev->dev);
-	cfg_hnd->ops->link_clk_set_rate(msm_host);
+	/*
+	 * Don't re-set link clock rates while video is streaming: it can
+	 * reprogram the byte/pixel dividers mid-frame and starve the lanes.
+	 * They were set at power-on and are still valid.
+	 */
+	if (!(msm_host->power_on && msm_host->enabled))
+		cfg_hnd->ops->link_clk_set_rate(msm_host);
 	cfg_hnd->ops->link_clk_enable(msm_host);
 
 	/* TODO: vote for bus bandwidth */
