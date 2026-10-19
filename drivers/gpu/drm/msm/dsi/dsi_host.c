@@ -1498,7 +1498,6 @@ static int dsi_cmd_dma_tx(struct msm_dsi_host *msm_host, int len)
 	if (!scheduled)
 		dsi_wait4video_eng_busy(msm_host);
 
-	t0 = ktime_get();
 	triggered = msm_dsi_manager_cmd_xfer_trigger(
 						msm_host->id, dma_base, len);
 	if (triggered) {
