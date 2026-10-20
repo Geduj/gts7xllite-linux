@@ -7,6 +7,7 @@
 #include <sound/soc.h>
 #include <sound/soc-dapm.h>
 #include <sound/pcm.h>
+#include <sound/pcm_params.h>
 #include <linux/soundwire/sdw.h>
 #include <sound/jack.h>
 #include <linux/input-event-codes.h>
@@ -17,6 +18,11 @@
 
 /* 48000 kHz * 32 bits/sample * 2 channels */
 #define MI2S_BCLK_RATE		3072000
+
+/* Quaternary TDM speaker amps: 48 kHz * 4 slots * 32 bit */
+#define QUAT_TDM_SLOTS		4
+#define QUAT_TDM_SLOT_WIDTH	32
+#define QUAT_TDM_BCLK_RATE	6144000
 
 struct sm8250_snd_data {
 	bool stream_prepared[AFE_PORT_MAX];
@@ -39,6 +45,9 @@ static int sm8250_snd_init(struct snd_soc_pcm_runtime *rtd)
 	case USB_RX:
 		return qcom_snd_usb_offload_jack_setup(rtd, &data->usb_offload_jack,
 						       &data->usb_offload_jack_setup);
+	case QUATERNARY_TDM_RX_0:
+		/* Speaker amps only, no headset jack on this link */
+		return 0;
 	default:
 		return qcom_snd_wcd_jack_setup(rtd, &data->jack, &data->jack_setup);
 	}
@@ -62,9 +71,11 @@ static int sm8250_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 					SNDRV_PCM_HW_PARAM_RATE);
 	struct snd_interval *channels = hw_param_interval(params,
 					SNDRV_PCM_HW_PARAM_CHANNELS);
-
+	struct snd_mask *fmt = hw_param_mask(params, SNDRV_PCM_HW_PARAM_FORMAT);
+	
 	rate->min = rate->max = 48000;
 	channels->min = channels->max = 2;
+	snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S16_LE);
 
 	return 0;
 }
@@ -76,6 +87,7 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
+	int i;
 
 	switch (cpu_dai->id) {
 	case PRIMARY_MI2S_RX:
@@ -126,6 +138,15 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 		snd_soc_dai_set_fmt(cpu_dai, fmt);
 		snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
 		break;
+	case QUATERNARY_TDM_RX_0:
+		snd_soc_dai_set_sysclk(cpu_dai,
+			Q6AFE_LPASS_CLK_ID_QUAD_TDM_IBIT,
+			QUAT_TDM_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
+		for_each_rtd_codec_dais(rtd, i, codec_dai)
+			snd_soc_dai_set_fmt(codec_dai, SND_SOC_DAIFMT_BC_FC |
+					    SND_SOC_DAIFMT_NB_NF |
+					    SND_SOC_DAIFMT_DSP_A);
+		break;
 	default:
 		break;
 	}
@@ -142,6 +163,47 @@ static int sm8250_snd_prepare(struct snd_pcm_substream *substream)
 	return qcom_snd_sdw_prepare(substream, &data->stream_prepared[cpu_dai->id]);
 }
 
+static int sm8250_snd_hw_params(struct snd_pcm_substream *substream,
+				struct snd_pcm_hw_params *params)
+{
+	static unsigned int tdm_slot_offset[QUAT_TDM_SLOTS] = { 0, 4, 8, 12 };
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *codec_dai;
+	unsigned int channels = params_channels(params);
+	int ret, i;
+
+	if (cpu_dai->id != QUATERNARY_TDM_RX_0)
+		return 0;
+
+	ret = snd_soc_dai_set_tdm_slot(cpu_dai, 0, GENMASK(channels - 1, 0),
+				       QUAT_TDM_SLOTS, QUAT_TDM_SLOT_WIDTH);
+	if (ret < 0) {
+		dev_err(rtd->dev, "quat tdm: cpu slot err %d\n", ret);
+		return ret;
+	}
+
+	ret = snd_soc_dai_set_channel_map(cpu_dai, 0, NULL,
+					  channels, tdm_slot_offset);
+	if (ret < 0) {
+		dev_err(rtd->dev, "quat tdm: channel map err %d\n", ret);
+		return ret;
+	}
+
+	/* Each amp picks its slot with its own "DACPCM Source" mux */
+	for_each_rtd_codec_dais(rtd, i, codec_dai) {
+		ret = snd_soc_dai_set_tdm_slot(codec_dai, 0, 0, QUAT_TDM_SLOTS,
+					       QUAT_TDM_SLOT_WIDTH);
+		if (ret < 0) {
+			dev_err(rtd->dev, "quat tdm: %s slot err %d\n",
+				codec_dai->name, ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 static int sm8250_snd_hw_free(struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
@@ -154,6 +216,7 @@ static int sm8250_snd_hw_free(struct snd_pcm_substream *substream)
 static const struct snd_soc_ops sm8250_be_ops = {
 	.startup = sm8250_snd_startup,
 	.shutdown = qcom_snd_sdw_shutdown,
+	.hw_params = sm8250_snd_hw_params,
 	.hw_free = sm8250_snd_hw_free,
 	.prepare = sm8250_snd_prepare,
 };
@@ -210,6 +273,7 @@ static const struct of_device_id snd_sm8250_dt_match[] = {
 	{ .compatible = "qcom,qrb5165-rb5-sndcard", .data = "sm8250" },
 	{ .compatible = "qcom,sdm660-sndcard", .data = "sdm660" },
 	{ .compatible = "qcom,sm8250-sndcard", .data = "sm8250" },
+	{ .compatible = "samsung,gts7xllite-sndcard", .data = "sm7225" },
 	{}
 };
 

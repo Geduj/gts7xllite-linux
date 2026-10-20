@@ -25,6 +25,7 @@ struct q6afe_dai_priv_data {
 	uint32_t invert_sync;
 	uint32_t data_delay;
 	uint32_t data_align;
+	uint32_t lane_mask;
 };
 
 struct q6afe_dai_data {
@@ -278,6 +279,10 @@ static int q6tdm_hw_params(struct snd_pcm_substream *substream,
 	tdm->data_align_type = dai_data->priv[dai->id].data_align;
 	tdm->sync_src = dai_data->priv[dai->id].sync_src;
 	tdm->sync_mode = dai_data->priv[dai->id].sync_mode;
+	tdm->data_out_enable = dai_data->priv[dai->id].data_out_enable;
+	tdm->invert_sync = dai_data->priv[dai->id].invert_sync;
+	tdm->data_delay = dai_data->priv[dai->id].data_delay;
+	tdm->lane_mask = dai_data->priv[dai->id].lane_mask;
 
 	return 0;
 }
@@ -1147,6 +1152,10 @@ static void of_q6afe_parse_dai_data(struct device *dev,
 				dev_err(dev, "No Data align from DT\n");
 				break;
 			}
+			/* Optional: active TDM data lanes (bit N = lane N) */
+			priv->lane_mask = 0;
+			of_property_read_u32(node, "qcom,tdm-lane-mask",
+					     &priv->lane_mask);
 			break;
 		default:
 			break;

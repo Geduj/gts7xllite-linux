@@ -33,6 +33,14 @@
 #define AFE_PARAM_ID_HDMI_CONFIG	0x00010210
 #define AFE_MODULE_AUDIO_DEV_INTERFACE	0x0001020C
 #define AFE_MODULE_TDM			0x0001028A
+#define AFE_MODULE_GROUP_DEVICE		0x00010254
+#define AFE_PARAM_ID_GROUP_DEVICE_ENABLE	0x00010256
+#define AFE_PARAM_ID_GROUP_DEVICE_TDM_CONFIG	0x0001029E
+#define AFE_PARAM_ID_TDM_LANE_CONFIG	0x000102C1
+#define AFE_API_VERSION_GROUP_DEVICE_TDM_CONFIG	0x1
+#define AFE_GROUP_DEVICE_NUM_PORTS	8
+/* TDM group device IDs are the group's first port ID + 0x100 */
+#define AFE_GROUP_DEVICE_ID_OFFSET	0x100
 
 #define AFE_PARAM_ID_CDC_SLIMBUS_SLAVE_CFG 0x00010235
 #define AFE_PARAM_ID_USB_AUDIO_DEV_PARAMS    0x000102A5
@@ -646,10 +654,35 @@ struct afe_param_id_slot_mapping_cfg {
 	u16	ch_mapping[AFE_PORT_MAX_AUDIO_CHAN_CNT];
 } __packed;
 
+struct afe_param_id_group_device_tdm_cfg {
+	u32	group_device_cfg_minor_version;
+	u16	group_id;
+	u16	reserved;
+	u16	port_id[AFE_GROUP_DEVICE_NUM_PORTS];
+	u32	num_channels;
+	u32	sample_rate;
+	u32	bit_width;
+	u16	nslots_per_frame;
+	u16	slot_width;
+	u32	slot_mask;
+} __packed;
+
+struct afe_group_device_enable {
+	u16	group_id;
+	u16	enable;
+} __packed;
+
+struct afe_param_id_tdm_lane_cfg {
+	u16	port_id;
+	u16	lane_mask;
+} __packed;
+
 struct q6afe_port {
 	wait_queue_head_t wait;
 	union afe_port_config port_cfg;
 	struct afe_param_id_slot_mapping_cfg *scfg;
+	struct afe_param_id_group_device_tdm_cfg *gcfg;
+	u16 lane_mask;
 	struct aprv2_ibasic_rsp_result_t result;
 	int token;
 	int id;
@@ -985,6 +1018,7 @@ static void q6afe_port_free(struct kref *ref)
 	scoped_guard(spinlock_irqsave, &afe->port_list_lock)
 		list_del(&port->node);
 	kfree(port->scfg);
+	kfree(port->gcfg);
 	kfree(port);
 }
 
@@ -1310,6 +1344,54 @@ int q6afe_port_set_sysclk(struct q6afe_port *port, int clk_id,
 }
 EXPORT_SYMBOL_GPL(q6afe_port_set_sysclk);
 
+static int q6afe_tdm_group_enable(struct q6afe_port *port, bool enable)
+{
+	struct afe_param_id_group_device_tdm_cfg *gcfg = port->gcfg;
+	struct afe_group_device_enable genable;
+	struct afe_param_id_tdm_lane_cfg lcfg;
+	struct q6afe *afe = port->afe;
+	int ret;
+
+	if (!gcfg)
+		return 0;
+
+	if (enable) {
+		ret = q6afe_port_set_param(port, gcfg,
+					   AFE_PARAM_ID_GROUP_DEVICE_TDM_CONFIG,
+					   AFE_MODULE_GROUP_DEVICE, sizeof(*gcfg));
+		if (ret) {
+			dev_err(afe->dev, "TDM group 0x%x config failed %d\n",
+				gcfg->group_id, ret);
+			return ret;
+		}
+
+		if (port->lane_mask) {
+			lcfg.port_id = gcfg->group_id;
+			lcfg.lane_mask = port->lane_mask;
+			ret = q6afe_port_set_param(port, &lcfg,
+						   AFE_PARAM_ID_TDM_LANE_CONFIG,
+						   AFE_MODULE_GROUP_DEVICE,
+						   sizeof(lcfg));
+			if (ret) {
+				dev_err(afe->dev, "TDM group 0x%x lane config failed %d\n",
+					gcfg->group_id, ret);
+				return ret;
+			}
+		}
+	}
+
+	genable.group_id = gcfg->group_id;
+	genable.enable = enable;
+	ret = q6afe_port_set_param(port, &genable,
+				   AFE_PARAM_ID_GROUP_DEVICE_ENABLE,
+				   AFE_MODULE_GROUP_DEVICE, sizeof(genable));
+	if (ret)
+		dev_err(afe->dev, "TDM group 0x%x %s failed %d\n",
+			gcfg->group_id, enable ? "enable" : "disable", ret);
+
+	return ret;
+}
+
 /**
  * q6afe_port_stop() - Stop a afe port
  *
@@ -1354,6 +1436,8 @@ int q6afe_port_stop(struct q6afe_port *port)
 	ret = afe_apr_send_pkt(afe, pkt, port, AFE_PORT_CMD_DEVICE_STOP);
 	if (ret)
 		dev_err(afe->dev, "AFE close failed %d\n", ret);
+
+	q6afe_tdm_group_enable(port, false);
 
 	return ret;
 }
@@ -1407,6 +1491,35 @@ void q6afe_tdm_port_prepare(struct q6afe_port *port,
 
 	pcfg->tdm_cfg.slot_width = cfg->slot_width;
 	pcfg->tdm_cfg.slot_mask = cfg->slot_mask;
+	pcfg->tdm_cfg.ctrl_data_out_enable = cfg->data_out_enable;
+	pcfg->tdm_cfg.ctrl_invert_sync_pulse = cfg->invert_sync;
+	pcfg->tdm_cfg.ctrl_sync_data_delay = cfg->data_delay;
+
+	/*
+	 * Some ADSP builds only serialize TDM data once the port is part of
+	 * an enabled group device (downstream always sets one up), so make
+	 * this port a single-member group spanning all slots of the frame.
+	 */
+	kfree(port->gcfg);
+	port->gcfg = kzalloc_obj(*port->gcfg);
+	if (port->gcfg) {
+		unsigned int lanes = cfg->lane_mask ? hweight16(cfg->lane_mask) : 1;
+
+		port->gcfg->group_device_cfg_minor_version =
+			AFE_API_VERSION_GROUP_DEVICE_TDM_CONFIG;
+		port->gcfg->group_id = port->id + AFE_GROUP_DEVICE_ID_OFFSET;
+		port->gcfg->port_id[0] = port->id;
+		port->gcfg->num_channels = cfg->nslots_per_frame * lanes;
+		port->gcfg->sample_rate = cfg->sample_rate;
+		port->gcfg->bit_width = cfg->slot_width;
+		port->gcfg->nslots_per_frame = cfg->nslots_per_frame;
+		port->gcfg->slot_width = cfg->slot_width;
+		/* The group spans every slot of the frame; the port uses a subset */
+		port->gcfg->slot_mask = GENMASK(cfg->nslots_per_frame - 1, 0);
+	}
+	port->lane_mask = cfg->lane_mask;
+
+	kfree(port->scfg);
 	port->scfg = kzalloc_obj(*port->scfg);
 	if (!port->scfg)
 		return;
@@ -1714,6 +1827,10 @@ int q6afe_port_start(struct q6afe_port *port)
 	int ret, param_id = port->cfg_type;
 	struct apr_pkt *pkt;
 	int pkt_size;
+
+	ret = q6afe_tdm_group_enable(port, true);
+	if (ret)
+		return ret;
 
 	ret  = q6afe_port_set_param_v2(port, &port->port_cfg, param_id,
 				       AFE_MODULE_AUDIO_DEV_INTERFACE,
