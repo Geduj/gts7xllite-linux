@@ -19,6 +19,9 @@
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include <dt-bindings/sound/cs35l45.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
+
 #include "sm7225.dtsi"
 #include "pm6350.dtsi"
 #include "pmk8350.dtsi"
@@ -699,4 +702,120 @@
 
 &gpi_dma1 {
 	status = "okay";
+};
+
+/* ------------------------------------------------------------------ */
+/* speaker */
+&i2c10 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	speaker_amp_l: speaker-amp@30 {
+		compatible = "cirrus,cs35l45";
+		reg = <0x30>;
+		interrupts-extended = <&tlmm 54 IRQ_TYPE_LEVEL_LOW>;
+		reset-gpios = <&tlmm 55 GPIO_ACTIVE_HIGH>;
+		pinctrl-0 = <&spk_amp_default>;
+		pinctrl-names = "default";
+		cirrus,asp-sdout-hiz-ctrl = <(CS35L45_ASP_TX_HIZ_UNUSED | CS35L45_ASP_TX_HIZ_DISABLED)>;
+		sound-name-prefix = "SpkrLeft";
+		#sound-dai-cells = <1>;
+
+		cirrus,gpio-ctrl1 { gpio-ctrl = <0x2>; };
+		cirrus,gpio-ctrl2 { gpio-ctrl = <0x2>; };
+	};
+
+	speaker_amp_r: speaker-amp@31 {
+		compatible = "cirrus,cs35l45";
+		reg = <0x31>;
+		interrupts-extended = <&tlmm 54 IRQ_TYPE_LEVEL_LOW>;
+		reset-gpios = <&tlmm 55 GPIO_ACTIVE_HIGH>;
+		cirrus,asp-sdout-hiz-ctrl = <(CS35L45_ASP_TX_HIZ_UNUSED | CS35L45_ASP_TX_HIZ_DISABLED)>;
+		sound-name-prefix = "SpkrRight";
+		#sound-dai-cells = <1>;
+
+		cirrus,gpio-ctrl1 { gpio-ctrl = <0x2>; };
+		cirrus,gpio-ctrl2 { gpio-ctrl = <0x2>; };
+	};
+};
+
+&tlmm {
+	spk_amp_default: spk-amp-default-state {
+		pins = "gpio54", "gpio55";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};
+
+&q6asmdai {
+	dai@0 {
+		reg = <0>;
+	};
+};
+
+&q6afedai {
+	dai@48 {
+		reg = <QUATERNARY_TDM_RX_0>;
+		qcom,tdm-sync-mode = <0>;
+		qcom,tdm-sync-src = <1>;
+		qcom,tdm-data-out = <0>;
+		qcom,tdm-invert-sync = <0>;
+		qcom,tdm-data-delay = <1>;
+		qcom,tdm-data-align = <0>;
+		
+		qcom,tdm-lane-mask = <0x1>;	/* sd0 (Samsung: lane-mask [00 01]) */
+	};
+};
+
+&lpass_tlmm {
+	quat_tdm_active: quat-tdm-active-state {
+		clk-pins {
+			pins = "gpio0";
+			function = "qua_mi2s_sclk";
+			drive-strength = <8>;
+			bias-disable;
+			output-high;
+		};
+		ws-pins {
+			pins = "gpio1";
+			function = "qua_mi2s_ws";
+			drive-strength = <8>;
+			bias-disable;
+			output-high;
+		};
+		data-pins {
+			pins = "gpio2", "gpio3";
+			function = "qua_mi2s_data";
+			drive-strength = <8>;
+			bias-disable;
+		};
+	};
+};
+
+&sound {
+	compatible = "samsung,gts7xllite-sndcard";
+	model = "Samsung Galaxy Tab S7 FE";
+	pinctrl-0 = <&quat_tdm_active>;
+	pinctrl-names = "default";
+
+	mm1-dai-link {
+		link-name = "MultiMedia1";
+		cpu {
+			sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>;
+		};
+	};
+
+	speaker-dai-link {
+		link-name = "Speaker Playback";
+		cpu {
+			sound-dai = <&q6afedai QUATERNARY_TDM_RX_0>;
+		};
+		platform {
+			sound-dai = <&q6routing>;
+		};
+		codec {
+			sound-dai = <&speaker_amp_l 0>, <&speaker_amp_r 0>;
+		};
+	};
 };

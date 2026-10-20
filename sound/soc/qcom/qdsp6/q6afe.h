@@ -194,6 +194,10 @@ struct q6afe_tdm_cfg {
 	u16	slot_mask;
 	u32	data_align_type;
 	u16	ch_mapping[AFE_MAX_CHAN_COUNT];
+	u16	data_out_enable;
+	u16	invert_sync;
+	u16	data_delay;
+	u16	lane_mask;
 };
 
 struct q6afe_cdc_dma_cfg {
