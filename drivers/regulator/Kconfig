@@ -25,6 +25,14 @@ menuconfig REGULATOR
 
 if REGULATOR
 
+config REGULATOR_SM5714
+	tristate "Silicon Mitus SM5714 USB OTG VBUS regulator"
+	depends on MFD_SM5714
+	help
+	  Exposes the SM5714 charger's reverse-boost (USB OTG) output as a
+	  regulator, so a Type-C driver can supply VBUS in host mode.
+
+
 config REGULATOR_DEBUG
 	bool "Regulator debug support"
 	help

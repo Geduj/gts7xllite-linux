@@ -31,8 +31,7 @@
 
 / {
 	model = "Samsung GTS7XLLITE PROJECT (board-id,05)";
-	compatible = "samsung,gts7xllite", "qcom,sm7225",
-		     "qcom,lagoon-mtp", "qcom,lagoon", "qcom,mtp";
+	compatible = "samsung,gts7xllite", "qcom,lagoon-mtp", "qcom,lagoon", "qcom,mtp", "qcom,sm7225";
 	chassis-type = "tablet";
 
 	qcom,msm-id = <434 0x10000>, <459 0x10000>;
@@ -507,13 +506,21 @@
 	status = "okay";
 };
 
-/* Peripheral-only, USB2-only: enough for USB networking, no Type-C driver needed */
+/* Dual-role, USB2-only for now. Role set via /sys/class/usb_role until
+ * an SM5714 Type-C driver exists; boots as peripheral so NCM keeps working. */
 &usb_1_dwc3 {
-	dr_mode = "peripheral";
+	dr_mode = "otg";
+	usb-role-switch;
+	role-switch-default-mode = "peripheral";
 	maximum-speed = "high-speed";
 	phys = <&usb_1_hsphy>;
 	phy-names = "usb2-phy";
 };
+
+&usb_1_dwc3_hs_out {
+	remote-endpoint = <&typec_hs_in>;
+};
+
 
 &usb_1_hsphy {
 	vdd-supply = <&vreg_l18a>;
@@ -661,8 +668,41 @@
 	clock-frequency = <400000>;
 	status = "okay";
 
-	/* SM5714 USB-PD @ 33 (IRQ TLMM 7) */
+		typec@33 {
+		compatible = "siliconmitus,sm5714-typec";
+		reg = <0x33>;
+		interrupts-extended = <&tlmm 7 IRQ_TYPE_LEVEL_LOW>;
+		pinctrl-0 = <&typec_int_default>;
+		pinctrl-names = "default";
+ 
+		vbus-supply = <&usb_otg_vbus>;
+		siliconmitus,muic = <&sm5714>;
+ 
+		connector {
+			compatible = "usb-c-connector";
+			label = "USB-C";
+			data-role = "dual";
+			power-role = "dual";
+			typec-power-opmode = "default";
+ 
+			port {
+				typec_hs_in: endpoint {
+					remote-endpoint = <&usb_1_dwc3_hs_out>;
+				};
+			};
+		};
+	};
 };
+
+&tlmm {
+	typec_int_default: typec-int-state {
+		pins = "gpio7";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+};
+
 
 &i2c7 {
 	clock-frequency = <400000>;

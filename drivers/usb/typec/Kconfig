@@ -52,6 +52,16 @@ source "drivers/usb/typec/ucsi/Kconfig"
 
 source "drivers/usb/typec/tipd/Kconfig"
 
+config TYPEC_SM5714
+	tristate "Silicon Mitus SM5714 Type-C port (CC detection, no PD)"
+	depends on I2C && MFD_SM5714
+	depends on USB_ROLE_SWITCH && REGULATOR
+	select REGMAP_I2C
+	help
+	  CC attach/detach handling for the SM5714 PD block: switches the
+	  USB controller between host and device and turns the OTG VBUS
+	  boost on for sinks. No USB Power Delivery.
+
 config TYPEC_ANX7411
 	tristate "Analogix ANX7411 Type-C DRP Port controller driver"
 	depends on I2C

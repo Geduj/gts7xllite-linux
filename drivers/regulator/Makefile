@@ -3,6 +3,7 @@
 # Makefile for regulator drivers.
 #
 
+obj-$(CONFIG_REGULATOR_SM5714)	+= sm5714-regulator.o
 
 obj-$(CONFIG_REGULATOR) += core.o dummy.o fixed-helper.o helpers.o devres.o irq_helpers.o
 obj-$(CONFIG_REGULATOR_NETLINK_EVENTS) += event.o

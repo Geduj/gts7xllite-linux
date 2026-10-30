@@ -12,6 +12,7 @@
  * Samsung's downstream sm5714_fuelgauge.c (GPL-2.0).
  */
 
+#include <linux/math64.h>
 #include <linux/mfd/sm5714.h>
 #include <linux/module.h>
 #include <linux/mod_devicetable.h>
@@ -107,12 +108,37 @@ static int sm5714_fg_get_status(struct sm5714_fg *fg, int *status)
 	return 0;
 }
 
+/*
+ * SOC in 1/256 % (SRAM 8.8 fixed point), clamped to 0..100 %. Used to
+ * scale the design capacity into CHARGE_NOW / ENERGY_NOW with more
+ * resolution than the integer CAPACITY.
+ */
+static int sm5714_fg_get_soc_fine(struct sm5714_fg *fg, unsigned int *soc)
+{
+	unsigned int raw;
+	int ret;
+
+	ret = sm5714_fg_read_sram(fg, SM5714_FG_SRAM_SOC, &raw);
+	if (ret)
+		return ret;
+
+	*soc = min(raw, 100U << 8);
+	return 0;
+}
+
+/* full * soc / (100 * 256), full in uAh or uWh */
+static int sm5714_fg_scale_soc(int full, unsigned int soc)
+{
+	return div_u64((u64)full * soc, 100 * 256);
+}
+
 static int sm5714_fg_get_property(struct power_supply *psy,
 				  enum power_supply_property psp,
 				  union power_supply_propval *val)
 {
 	struct sm5714_fg *fg = power_supply_get_drvdata(psy);
-	unsigned int raw;
+	struct power_supply_battery_info *bi = fg->bat_info;
+	unsigned int raw, soc;
 	int ret = 0;
 
 	switch (psp) {
@@ -202,6 +228,55 @@ static int sm5714_fg_get_property(struct power_supply *psy,
 		val->intval = fg->bat_info->voltage_min_design_uv;
 		break;
 
+	/*
+	 * The gauge's learned full capacity is not decoded yet, so "full"
+	 * is the design value and CHARGE_NOW / ENERGY_NOW are SOC-scaled.
+	 */
+	case POWER_SUPPLY_PROP_CHARGE_FULL:
+		if (!bi || bi->charge_full_design_uah <= 0)
+			return -ENODATA;
+		val->intval = bi->charge_full_design_uah;
+		break;
+
+	case POWER_SUPPLY_PROP_CHARGE_NOW:
+		if (!bi || bi->charge_full_design_uah <= 0)
+			return -ENODATA;
+		ret = sm5714_fg_get_soc_fine(fg, &soc);
+		if (!ret)
+			val->intval = sm5714_fg_scale_soc(bi->charge_full_design_uah, soc);
+		break;
+
+	case POWER_SUPPLY_PROP_ENERGY_FULL_DESIGN:
+	case POWER_SUPPLY_PROP_ENERGY_FULL:
+		if (!bi || bi->energy_full_design_uwh <= 0)
+			return -ENODATA;
+		val->intval = bi->energy_full_design_uwh;
+		break;
+
+	case POWER_SUPPLY_PROP_ENERGY_NOW:
+		if (!bi || bi->energy_full_design_uwh <= 0)
+			return -ENODATA;
+		ret = sm5714_fg_get_soc_fine(fg, &soc);
+		if (!ret)
+			val->intval = sm5714_fg_scale_soc(bi->energy_full_design_uwh, soc);
+		break;
+
+	case POWER_SUPPLY_PROP_POWER_NOW: {
+		/* V * I, same sign as CURRENT_NOW (negative = discharging) */
+		unsigned int vraw;
+		int uv, ua;
+
+		ret = sm5714_fg_read_sram(fg, SM5714_FG_SRAM_VBAT, &vraw);
+		if (!ret)
+			ret = sm5714_fg_read_sram(fg, SM5714_FG_SRAM_CURRENT, &raw);
+		if (ret)
+			break;
+		uv = sm5714_fg_raw_to_uv(vraw);
+		ua = sm5714_fg_raw_to_ua(fg, raw);
+		val->intval = div_s64((s64)uv * ua, 1000000);
+		break;
+	}
+
 	default:
 		return -EINVAL;
 	}
@@ -224,6 +299,12 @@ static const enum power_supply_property sm5714_fg_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
 	POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
+	POWER_SUPPLY_PROP_CHARGE_FULL,
+	POWER_SUPPLY_PROP_CHARGE_NOW,
+	POWER_SUPPLY_PROP_ENERGY_FULL_DESIGN,
+	POWER_SUPPLY_PROP_ENERGY_FULL,
+	POWER_SUPPLY_PROP_ENERGY_NOW,
+	POWER_SUPPLY_PROP_POWER_NOW,
 };
 
 static const struct power_supply_desc sm5714_fg_desc = {
