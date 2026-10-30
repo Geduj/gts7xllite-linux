@@ -19,7 +19,7 @@
 	clock-frequency = <400000>;
 	status = "okay";
 
-	pmic@49 {
+	sm5714: pmic@49 {
 		compatible = "siliconmitus,sm5714";
 		reg = <0x49>;
 
@@ -29,6 +29,14 @@
 		fuel-gauge {
 			compatible = "siliconmitus,sm5714-fuel-gauge";
 			monitored-battery = <&battery>;
+		};
+
+		regulators {
+			usb_otg_vbus: usb-otg-vbus {
+				regulator-name = "usb_otg_vbus";
+				regulator-min-microvolt = <5100000>;
+				regulator-max-microvolt = <5100000>;
+			};
 		};
 	};
 

@@ -31,7 +31,7 @@ static const struct regmap_config sm5714_muic_regmap_config = {
 	.name = "muic",
 	.reg_bits = 8,
 	.val_bits = 8,
-	.max_register = 0x1e,
+	.max_register = 0x58,
 };
 
 /* Fuel gauge: 8-bit address, 16-bit little-endian value (SMBus word) */
@@ -46,7 +46,31 @@ static const struct regmap_config sm5714_fg_regmap_config = {
 static const struct mfd_cell sm5714_devs[] = {
 	MFD_CELL_OF("sm5714-fuel-gauge", NULL, NULL, 0, 0,
 		    "siliconmitus,sm5714-fuel-gauge"),
+	/* OTG VBUS boost; looks up the "regulators" child of this node */
+	MFD_CELL_NAME("sm5714-regulator"),
 };
+
+/**
+ * sm5714_muic_set_usb_path() - switch the MUIC D+/D- path
+ * @sm5714: core handle
+ * @usb: true routes D+/D- to the USB controller in manual mode (needed for
+ *       OTG host, where no BC1.2 detection closes the switch); false
+ *       returns the switch to automatic mode.
+ */
+int sm5714_muic_set_usb_path(struct sm5714 *sm5714, bool usb)
+{
+	if (usb)
+		return regmap_update_bits(sm5714->regmap_muic,
+					  SM5714_MUIC_REG_MANUAL_SW,
+					  SM5714_MUIC_MANUAL_SW_MANUAL |
+					  SM5714_MUIC_MANUAL_SW_PATH,
+					  SM5714_MUIC_MANUAL_SW_MANUAL |
+					  SM5714_MUIC_MANUAL_SW_USB);
+
+	return regmap_clear_bits(sm5714->regmap_muic, SM5714_MUIC_REG_MANUAL_SW,
+				 SM5714_MUIC_MANUAL_SW_MANUAL);
+}
+EXPORT_SYMBOL_GPL(sm5714_muic_set_usb_path);
 
 static int sm5714_probe(struct i2c_client *client)
 {
