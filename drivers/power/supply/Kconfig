@@ -549,6 +549,18 @@ config BATTERY_SM5714
 	  Fuel gauge driver for the Silicon Mitus SM5714. Read-only: relies
 	  on the gauge having been initialised by the vendor firmware.
 
+config CHARGER_SM5714
+	tristate "Silicon Mitus SM5714 charger driver"
+	depends on MFD_SM5714
+	help
+	  Say Y here to enable support for the switching charger of the
+	  Silicon Mitus SM5714 PMIC, found in some Samsung Galaxy devices.
+	  It enables charging and exposes input and charge current
+	  limits through the power supply class.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called sm5714_charger.
+
 config CHARGER_MAX8903
 	tristate "MAX8903 Battery DC-DC Charger for USB and Adapter Power"
 	help

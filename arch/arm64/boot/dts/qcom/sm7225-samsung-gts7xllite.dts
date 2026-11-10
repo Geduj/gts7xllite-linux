@@ -21,8 +21,10 @@
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 #include <dt-bindings/sound/cs35l45.h>
 #include <dt-bindings/sound/qcom,q6asm.h>
+#include <dt-bindings/usb/pd.h>
 
 #include "sm7225.dtsi"
+#include "pm6150l.dtsi"
 #include "pm6350.dtsi"
 #include "pmk8350.dtsi"
 #include "gts7xllite-sm5714.dtsi"
@@ -51,6 +53,7 @@
 
 		/* Bootloader splash (cont_splash_region), panel 1600x2560 */
 		framebuffer0: framebuffer@a0000000 {
+			status = "disabled";
 			compatible = "simple-framebuffer";
 			reg = <0 0xa0000000 0 (1600 * 2560 * 4)>;
 			width = <1600>;
@@ -199,7 +202,6 @@
 		regulator-name = "panel_buck_en";
 		gpio = <&tlmm 88 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
-		regulator-boot-on;
 		pinctrl-0 = <&panel_vsp_en>;
 		pinctrl-names = "default";
 	};
@@ -209,7 +211,6 @@
 		regulator-name = "panel_buck_en2";
 		gpio = <&tlmm 89 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
-		regulator-boot-on;
 		pinctrl-0 = <&panel_vsn_en>;
 		pinctrl-names = "default";
 	};
@@ -219,7 +220,6 @@
 		regulator-name = "panel_boost_en";
 		gpio = <&tlmm 72 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
-		regulator-boot-on;
 		pinctrl-0 = <&panel_boost_en>;
 		pinctrl-names = "default";
 	};
@@ -668,23 +668,34 @@
 	clock-frequency = <400000>;
 	status = "okay";
 
-		typec@33 {
+	typec@33 {
 		compatible = "siliconmitus,sm5714-typec";
 		reg = <0x33>;
 		interrupts-extended = <&tlmm 7 IRQ_TYPE_LEVEL_LOW>;
 		pinctrl-0 = <&typec_int_default>;
 		pinctrl-names = "default";
- 
+
 		vbus-supply = <&usb_otg_vbus>;
 		siliconmitus,muic = <&sm5714>;
- 
+
 		connector {
 			compatible = "usb-c-connector";
 			label = "USB-C";
 			data-role = "dual";
 			power-role = "dual";
-			typec-power-opmode = "default";
- 
+			try-power-role = "sink";
+			self-powered;
+
+			/* as source (OTG): 5 V 0.9 A */
+			source-pdos = <PDO_FIXED(5000, 900, PDO_FIXED_DUAL_ROLE |
+						 PDO_FIXED_DATA_SWAP |
+						 PDO_FIXED_USB_COMM)>;
+			sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_DUAL_ROLE |
+					       PDO_FIXED_DATA_SWAP |
+					       PDO_FIXED_USB_COMM)
+				     PDO_FIXED(9000, 2000, 0)>;
+			op-sink-microwatt = <15000000>;
+
 			port {
 				typec_hs_in: endpoint {
 					remote-endpoint = <&usb_1_dwc3_hs_out>;
@@ -894,5 +905,43 @@
 		max-speed = <3200000>;
 
 		local-bd-address = [00 00 00 00 00 00];
+	};
+};
+
+&pm6150l_adc {
+	pinctrl-0 = <&pm6150l_adc_default>;
+	pinctrl-names = "default";
+
+	channel@4f {
+		reg = <ADC5_AMUX_THM3_100K_PU>;
+		label = "blkt_therm";
+		qcom,hw-settle-time = <200>;
+		qcom,pre-scaling = <1 1>;
+		qcom,ratiometric;
+	};
+
+	channel@53 {
+		reg = <ADC5_GPIO2_100K_PU>;
+		label = "batt_therm";
+		qcom,hw-settle-time = <200>;
+		qcom,pre-scaling = <1 1>;
+		qcom,ratiometric;
+	};
+
+	channel@54 {
+		reg = <ADC5_GPIO3_100K_PU>;
+		label = "chg_therm";
+		qcom,hw-settle-time = <200>;
+		qcom,pre-scaling = <1 1>;
+		qcom,ratiometric;
+	};
+};
+
+&pm6150l_gpios {
+	/* thermistor inputs: PMIC GPIO pins as analog (high-Z), as on FP4 */
+	pm6150l_adc_default: adc-default-state {
+		pins = "gpio6", "gpio7";
+		function = PMIC_GPIO_FUNC_NORMAL;
+		bias-high-impedance;
 	};
 };
