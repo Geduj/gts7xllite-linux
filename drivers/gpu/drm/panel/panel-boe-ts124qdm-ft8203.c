@@ -657,7 +657,7 @@ static int ft8203_probe(struct mipi_dsi_device *dsi)
 	ctx->dsc.bits_per_pixel = 8 << 4;	/* 4 fractional bits */
 	ctx->dsc.block_pred_enable = false;	/* not set downstream for FT8203 */
 	dsi->dsc = &ctx->dsc;
-	dsi->dsc_slice_per_pkt = 2;		/* qcom,mdss-dsc-slice-per-pkt = <2> */
+	dsi->mode_flags |= MIPI_DSI_MODE_DSC_ALL_SLICES_IN_PKT;	/* qcom,mdss-dsc-slice-per-pkt = <2> == slice_count */
 
 	ret = mipi_dsi_attach(dsi);
 	if (ret < 0) {
