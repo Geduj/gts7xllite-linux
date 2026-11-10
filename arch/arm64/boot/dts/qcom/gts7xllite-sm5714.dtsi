@@ -15,6 +15,15 @@
 	};
 };
 
+&tlmm {
+	sm5714_int_default: sm5714-int-default-state {
+		pins = "gpio84";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+};
+
 &i2c7 {
 	clock-frequency = <400000>;
 	status = "okay";
@@ -25,10 +34,15 @@
 
 		/* Shared IRQ (TLMM 84, active low); not used by the drivers yet. */
 		/* interrupts-extended = <&tlmm 84 IRQ_TYPE_LEVEL_LOW>; */
+		interrupts-extended = <&tlmm 84 IRQ_TYPE_LEVEL_LOW>;
+		pinctrl-0 = <&sm5714_int_default>;
+		pinctrl-names = "default";
 
 		fuel-gauge {
 			compatible = "siliconmitus,sm5714-fuel-gauge";
 			monitored-battery = <&battery>;
+			io-channels = <&pm6150l_adc ADC5_GPIO2_100K_PU>;
+			io-channel-names = "batt-therm";
 		};
 
 		regulators {

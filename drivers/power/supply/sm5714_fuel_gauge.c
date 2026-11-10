@@ -2,6 +2,12 @@
 /*
  * Silicon Mitus SM5714 fuel gauge driver
  *
+ * charge_control_{start,end}_threshold (writable, % SOC) are stored here
+ * for upower / the user; the sm5714-charger enforces them.
+ *
+ * TEMP comes from the battery NTC through an optional IIO channel
+ * "batt-therm" (PM6150L ADC5 on gts7xllite); without it, the gauge die.
+ *
  * Read-only for now: the gauge keeps its battery model and state across
  * reboots (it runs from the battery), so as long as SYSTEM_STATUS reports
  * INIT_DONE we only read SRAM. Loading the model on a cold gauge is not
@@ -12,6 +18,7 @@
  * Samsung's downstream sm5714_fuelgauge.c (GPL-2.0).
  */
 
+#include <linux/iio/consumer.h>
 #include <linux/math64.h>
 #include <linux/mfd/sm5714.h>
 #include <linux/module.h>
@@ -28,6 +35,9 @@ struct sm5714_fg {
 	struct regmap *regmap_chg;	/* charger block, for STATUS */
 	struct power_supply *psy;
 	struct power_supply_battery_info *bat_info;
+	struct iio_channel *therm;	/* battery NTC, optional */
+	int chg_start;			/* resume charging at or below, % */
+	int chg_end;			/* stop charging at or above, % (100 = off) */
 	struct mutex sram_lock;		/* RADDR/RDATA pair must not interleave */
 };
 
@@ -192,10 +202,16 @@ static int sm5714_fg_get_property(struct power_supply *psy,
 		break;
 
 	case POWER_SUPPLY_PROP_TEMP:
-		/*
-		 * Gauge die temperature in 0.1 degC, not the battery NTC
-		 * (that is on the PM6150L ADC and not wired up yet).
-		 */
+		if (fg->therm) {
+			int mdegc;
+
+			/* ADC5 thermistor channels are processed to m degC */
+			ret = iio_read_channel_processed(fg->therm, &mdegc);
+			if (!ret)
+				val->intval = mdegc / 100;	/* 0.1 degC */
+			break;
+		}
+		/* No NTC: gauge die temperature in 0.1 degC */
 		ret = sm5714_fg_read_sram(fg, SM5714_FG_SRAM_TEMPERATURE, &raw);
 		if (!ret) {
 			int t = ((raw & 0x7fff) * 10 * 2989) >> 19;
@@ -277,11 +293,55 @@ static int sm5714_fg_get_property(struct power_supply *psy,
 		break;
 	}
 
+	case POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD:
+		val->intval = READ_ONCE(fg->chg_start);
+		break;
+
+	case POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD:
+		val->intval = READ_ONCE(fg->chg_end);
+		break;
+
 	default:
 		return -EINVAL;
 	}
 
 	return ret;
+}
+
+static int sm5714_fg_set_property(struct power_supply *psy,
+				  enum power_supply_property psp,
+				  const union power_supply_propval *val)
+{
+	struct sm5714_fg *fg = power_supply_get_drvdata(psy);
+	int v = val->intval;
+
+	switch (psp) {
+	case POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD:
+		if (v < 0 || v >= READ_ONCE(fg->chg_end))
+			return -EINVAL;
+		WRITE_ONCE(fg->chg_start, v);
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD:
+		if (v < 1 || v > 100)
+			return -EINVAL;
+		/* keep start below end so a plain "echo 80 > end" just works */
+		if (READ_ONCE(fg->chg_start) >= v)
+			WRITE_ONCE(fg->chg_start, max(v - 5, 0));
+		WRITE_ONCE(fg->chg_end, v);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	power_supply_changed(psy);
+	return 0;
+}
+
+static int sm5714_fg_property_is_writeable(struct power_supply *psy,
+					   enum power_supply_property psp)
+{
+	return psp == POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD ||
+	       psp == POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD;
 }
 
 static const enum power_supply_property sm5714_fg_props[] = {
@@ -305,6 +365,8 @@ static const enum power_supply_property sm5714_fg_props[] = {
 	POWER_SUPPLY_PROP_ENERGY_FULL,
 	POWER_SUPPLY_PROP_ENERGY_NOW,
 	POWER_SUPPLY_PROP_POWER_NOW,
+	POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD,
+	POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD,
 };
 
 static const struct power_supply_desc sm5714_fg_desc = {
@@ -313,6 +375,8 @@ static const struct power_supply_desc sm5714_fg_desc = {
 	.properties = sm5714_fg_props,
 	.num_properties = ARRAY_SIZE(sm5714_fg_props),
 	.get_property = sm5714_fg_get_property,
+	.set_property = sm5714_fg_set_property,
+	.property_is_writeable = sm5714_fg_property_is_writeable,
 };
 
 static int sm5714_fg_probe(struct platform_device *pdev)
@@ -331,6 +395,8 @@ static int sm5714_fg_probe(struct platform_device *pdev)
 	fg->dev = dev;
 	fg->regmap = sm5714->regmap_fg;
 	fg->regmap_chg = sm5714->regmap_chg;
+	fg->chg_start = 75;	/* upower's default pair is 75 / 80 */
+	fg->chg_end = 100;	/* no limit until someone sets one */
 
 	ret = devm_mutex_init(dev, &fg->sram_lock);
 	if (ret)
@@ -345,6 +411,16 @@ static int sm5714_fg_probe(struct platform_device *pdev)
 			 status);
 	if (status & SM5714_FG_SYSTEM_STATUS_JIG)
 		dev_warn(dev, "jig mode: VBAT reports VSYS\n");
+
+	/* Battery NTC; absent channel = fall back to the gauge die */
+	fg->therm = devm_iio_channel_get(dev, "batt-therm");
+	if (IS_ERR(fg->therm)) {
+		ret = PTR_ERR(fg->therm);
+		if (ret == -EPROBE_DEFER)
+			return ret;
+		dev_info(dev, "no batt-therm channel (%d), TEMP = gauge die\n", ret);
+		fg->therm = NULL;
+	}
 
 	psy_cfg.drv_data = fg;
 	psy_cfg.fwnode = dev_fwnode(dev);
