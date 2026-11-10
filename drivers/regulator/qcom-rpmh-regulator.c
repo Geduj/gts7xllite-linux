@@ -167,6 +167,7 @@ struct rpmh_vreg {
 	struct regulator_desc		rdesc;
 	const struct rpmh_vreg_hw_data	*hw_data;
 	bool				always_wait_for_ack;
+	bool				no_read;
 
 	int				enabled;
 	bool				bypassed;
@@ -254,6 +255,10 @@ static int rpmh_regulator_vrm_set_voltage_sel(struct regulator_dev *rdev,
 					selector > vreg->voltage_selector);
 }
 
+static bool no_rpmh_read;
+module_param(no_rpmh_read, bool, 0444);
+MODULE_PARM_DESC(no_rpmh_read, "Never read back RPMh regulator state");
+
 static int _rpmh_regulator_vrm_get_voltage(struct regulator_dev *rdev, int *uV)
 {
 	struct rpmh_vreg *vreg = rdev_get_drvdata(rdev);
@@ -261,6 +266,9 @@ static int _rpmh_regulator_vrm_get_voltage(struct regulator_dev *rdev, int *uV)
 		.addr = vreg->addr + RPMH_REGULATOR_REG_VRM_VOLTAGE,
 	};
 	int ret;
+
+	if (vreg->no_read)
+		return -ENOTRECOVERABLE;
 
 	ret = rpmh_read(vreg->dev, &cmd);
 	if (!ret)
@@ -373,6 +381,9 @@ static int rpmh_regulator_vrm_get_pmic_mode(struct rpmh_vreg *vreg, int *pmic_mo
 		.addr = vreg->addr + RPMH_REGULATOR_REG_VRM_MODE,
 	};
 	int ret;
+
+	if (vreg->no_read)
+		return -EINVAL;
 
 	ret = rpmh_read(vreg->dev, &cmd);
 	if (!ret)
@@ -552,6 +563,10 @@ static int rpmh_regulator_init_vreg(struct rpmh_vreg *vreg, struct device *dev,
 	vreg->always_wait_for_ack = of_property_read_bool(node,
 						"qcom,always-wait-for-ack");
 
+	vreg->no_read = no_rpmh_read ||
+			 of_property_read_bool(dev->of_node, "qcom,no-rpmh-read") ||
+			 of_property_read_bool(node, "qcom,no-rpmh-read");
+
 	vreg->rdesc.owner	= THIS_MODULE;
 	vreg->rdesc.type	= REGULATOR_VOLTAGE;
 	vreg->rdesc.ops		= vreg->hw_data->ops;
@@ -594,6 +609,9 @@ static int rpmh_regulator_determine_initial_mode(struct rpmh_vreg *vreg)
 	};
 	int ret, pmic_mode, mode;
 	int sts;
+
+	if (vreg->no_read)
+		return 0;
 
 	ret = rpmh_read(vreg->dev, &cmd);
 	if (ret) {

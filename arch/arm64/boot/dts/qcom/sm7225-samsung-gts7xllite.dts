@@ -298,6 +298,8 @@
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 			regulator-always-on;
 			regulator-boot-on;
+			/* Samsung fw resets the SoC after an RPMh read of L14A (7.3 readback) */
+			qcom,no-rpmh-read;
 		};
 
 		vreg_l18a: ldo18 {
